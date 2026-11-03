@@ -7,19 +7,26 @@ const { createApp } = require('./server');
 
 const file = process.env.PDS_DB || path.join(__dirname, 'data', 'diary.sqlite');
 const db = open(file);
-if (db.prepare('SELECT COUNT(*) c FROM plans').get().c > 0) { console.log('이미 자료가 있어 건너뜁니다:', file); process.exit(0); }
+// 7번부터는 계정이 필요하다: PDS_SEED_EMAIL / PDS_SEED_PASSWORD 환경 변수로 받는다(코드에 비밀값을 적지 않는다).
+const SEED_EMAIL = process.env.PDS_SEED_EMAIL, SEED_PASSWORD = process.env.PDS_SEED_PASSWORD;
+if (!SEED_EMAIL || !SEED_PASSWORD) { console.log('PDS_SEED_EMAIL·PDS_SEED_PASSWORD가 없어 시작 자료를 넣지 않습니다.'); process.exit(0); }
+const owner = db.prepare('SELECT id FROM users WHERE email=?').get(SEED_EMAIL.toLowerCase());
+if (owner && db.prepare('SELECT COUNT(*) c FROM plans WHERE user_id=?').get(owner.id).c > 0) { console.log('이미 자료가 있어 건너뜁니다:', file); process.exit(0); }
+let cookie = '';
 
 const req = (method, url, body, headers = {}) => new Promise((resolve, reject) => {
   const http = require('node:http');
   const srv = http.createServer(createApp(db)).listen(0, async () => {
     try {
-      const r = await fetch(`http://127.0.0.1:${srv.address().port}${url}`, { method, headers: { 'Content-Type': 'application/json', ...headers }, body: body ? JSON.stringify(body) : undefined });
+      const r = await fetch(`http://127.0.0.1:${srv.address().port}${url}`, { method, headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...headers }, body: body ? JSON.stringify(body) : undefined });
+      const sc = r.headers.getSetCookie()[0]; if (sc) cookie = sc.split(';')[0];
       const j = await r.json(); srv.close(); r.ok ? resolve(j) : reject(new Error(url + ' ' + JSON.stringify(j)));
     } catch (e) { srv.close(); reject(e); }
   });
 });
 
 (async () => {
+  await req('POST', owner ? '/api/auth/login' : '/api/auth/signup', { email: SEED_EMAIL, password: SEED_PASSWORD });
   const plan = await req('POST', '/api/plans', {
     title: '과제 6 플랜두씨 다이어리 완성', goal: '계획 → 실제로 한 일 → 돌아보기가 이어지는 다이어리를 서버 DB로 만들어 제출한다',
     start_date: '2026-11-02', end_date: '2026-11-08', priority: 1,

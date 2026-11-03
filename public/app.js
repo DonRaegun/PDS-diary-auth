@@ -1,6 +1,7 @@
 'use strict';
 // 모든 글자는 textContent/속성으로만 넣는다 (innerHTML 사용 안 함) → 스크립트 모양 글자도 그대로 보인다.
 const $app = document.getElementById('app');
+let me = null; // 로그인한 사람(서버가 /api/auth/me로 알려 준 값)
 const PRI = { 1: '높음', 2: '보통', 3: '낮음' };
 
 function h(tag, attrs, ...kids) {
@@ -33,6 +34,7 @@ async function api(method, url, body, headers) {
   });
   let data = null;
   try { data = await res.json(); } catch { /* 본문 없음 */ }
+  if (res.status === 401 && me && !url.startsWith('/api/auth/')) { me = null; showAuth('다시 로그인해 주세요'); }
   if (!res.ok) throw new Error((data && data.error) || `요청이 실패했습니다 (${res.status})`);
   return data;
 }
@@ -73,6 +75,7 @@ const formData = (form) => Object.fromEntries(new FormData(form).entries());
 // ---------- 라우터 ----------
 const views = {};
 async function render() {
+  if (!me) return showAuth();
   const { parts, query } = parseHash();
   const name = parts[0] || 'home';
   document.querySelectorAll('nav a[data-nav]').forEach((a) => a.classList.toggle('on', a.dataset.nav === (name === 'plan' ? 'home' : name)));
@@ -342,4 +345,3 @@ views.review = async (parts, q) => {
         [s.metrics.plan_count, s.metrics.done_count, s.metrics.overdue_count, s.metrics.blocked_count, s.metrics.estimated_minutes, s.metrics.actual_minutes, s.metrics.diff_minutes].map((v) => h('td', {}, v))))))) : h('p', { class: 'muted' }, '아직 저장한 돌아보기가 없습니다.'));
 };
 
-render();

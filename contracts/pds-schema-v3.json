@@ -1,5 +1,5 @@
 {
-  "schema": "pds-schema-v2",
+  "schema": "pds-schema-v3",
   "app": "plandoosee-diary",
   "database": "SQLite (서버 파일 DB, node:sqlite)",
   "date_rules": {
@@ -40,7 +40,7 @@
         {
           "name": "id",
           "type": "INTEGER",
-          "not_null": true,
+          "not_null": false,
           "primary_key": true,
           "default": null
         },
@@ -83,13 +83,149 @@
         "CREATE UNIQUE INDEX uq_completions_active ON completions(task_id) WHERE reverted_at IS NULL"
       ]
     },
+    "day_records": {
+      "description": "날짜별 기록(계획한 시간·실제 시간, 분). 계정당 같은 날짜 한 건만.",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "not_null": false,
+          "primary_key": true,
+          "default": null
+        },
+        {
+          "name": "user_id",
+          "type": "INTEGER",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "record_date",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "planned_minutes",
+          "type": "INTEGER",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "actual_minutes",
+          "type": "INTEGER",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "note",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": "''"
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "user_id",
+          "references": "users.id"
+        }
+      ],
+      "indexes": []
+    },
+    "experiments": {
+      "description": "5일 관찰의 1일차 설정(질문·지표·단위·계산 규칙·처음 계획 규칙). 계정마다 하나, 고치는 길 없음.",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "not_null": false,
+          "primary_key": true,
+          "default": null
+        },
+        {
+          "name": "user_id",
+          "type": "INTEGER",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "question",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "metric_name",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "unit",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "calc_rule",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "plan_rule",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "rules_json",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "user_id",
+          "references": "users.id"
+        }
+      ],
+      "indexes": []
+    },
     "plan_revisions": {
       "description": "계획 수정 이력. rev_no 1이 처음 세운 계획, 이후는 고칠 때마다 한 줄씩 추가(지우거나 덮어쓰지 않음).",
       "columns": [
         {
           "name": "id",
           "type": "INTEGER",
-          "not_null": true,
+          "not_null": false,
           "primary_key": true,
           "default": null
         },
@@ -180,12 +316,12 @@
       "indexes": []
     },
     "plans": {
-      "description": "계획. 현재 값만 들고 있다. 처음 값과 모든 수정본은 plan_revisions에 남는다.",
+      "description": "계획. 현재 값만 들고 있다. 처음 값과 모든 수정본은 plan_revisions에 남는다. (user_id: 주인. 모든 조회가 이 열로 걸러진다)",
       "columns": [
         {
           "name": "id",
           "type": "INTEGER",
-          "not_null": true,
+          "not_null": false,
           "primary_key": true,
           "default": null
         },
@@ -265,15 +401,28 @@
           "not_null": true,
           "primary_key": false,
           "default": null
+        },
+        {
+          "name": "user_id",
+          "type": "INTEGER",
+          "not_null": false,
+          "primary_key": false,
+          "default": null
         }
       ],
       "foreign_keys": [
+        {
+          "column": "user_id",
+          "references": "users.id"
+        },
         {
           "column": "carried_from_plan_id",
           "references": "plans.id"
         }
       ],
-      "indexes": []
+      "indexes": [
+        "CREATE INDEX idx_plans_user ON plans(user_id)"
+      ]
     },
     "review_carryovers": {
       "description": "돌아보기에서 정한 고칠 점 한 건이 넘어간 다음 계획. 원래 계획당 1건(UNIQUE).",
@@ -281,7 +430,7 @@
         {
           "name": "id",
           "type": "INTEGER",
-          "not_null": true,
+          "not_null": false,
           "primary_key": true,
           "default": null
         },
@@ -327,12 +476,12 @@
       "indexes": []
     },
     "review_snapshots": {
-      "description": "저장한 돌아보기 집계(저장 시점의 값).",
+      "description": "저장한 돌아보기 집계(저장 시점의 값). (user_id: 주인. 모든 조회가 이 열로 걸러진다)",
       "columns": [
         {
           "name": "id",
           "type": "INTEGER",
-          "not_null": true,
+          "not_null": false,
           "primary_key": true,
           "default": null
         },
@@ -377,12 +526,99 @@
           "not_null": true,
           "primary_key": false,
           "default": null
+        },
+        {
+          "name": "user_id",
+          "type": "INTEGER",
+          "not_null": false,
+          "primary_key": false,
+          "default": null
         }
       ],
       "foreign_keys": [
         {
+          "column": "user_id",
+          "references": "users.id"
+        },
+        {
           "column": "plan_id",
           "references": "plans.id"
+        }
+      ],
+      "indexes": []
+    },
+    "rule_changes": {
+      "description": "계획 규칙 변경 기록. 계정당 한 건, 1·2일차 기록을 가리키며 3일차 기록보다 먼저 남는다.",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "not_null": false,
+          "primary_key": true,
+          "default": null
+        },
+        {
+          "name": "user_id",
+          "type": "INTEGER",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "changed_at",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "reason",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "old_rule",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "new_rule",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "after_record1_id",
+          "type": "INTEGER",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "after_record2_id",
+          "type": "INTEGER",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "after_record2_id",
+          "references": "day_records.id"
+        },
+        {
+          "column": "after_record1_id",
+          "references": "day_records.id"
+        },
+        {
+          "column": "user_id",
+          "references": "users.id"
         }
       ],
       "indexes": []
@@ -393,7 +629,7 @@
         {
           "name": "id",
           "type": "INTEGER",
-          "not_null": true,
+          "not_null": false,
           "primary_key": true,
           "default": null
         },
@@ -457,6 +693,55 @@
         "CREATE INDEX idx_runs_task ON runs(task_id)"
       ]
     },
+    "sessions": {
+      "description": "로그인 세션. 토큰 원문은 저장하지 않고 SHA-256만 저장. 만료 시각(expires_at)이 지나면 거절·삭제.",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "not_null": false,
+          "primary_key": true,
+          "default": null
+        },
+        {
+          "name": "user_id",
+          "type": "INTEGER",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "token_hash",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "expires_at",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        }
+      ],
+      "foreign_keys": [
+        {
+          "column": "user_id",
+          "references": "users.id"
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_sessions_user ON sessions(user_id)"
+      ]
+    },
     "task_tags": {
       "description": "할 일의 태그(할 일 하나에 여러 개).",
       "columns": [
@@ -489,7 +774,7 @@
         {
           "name": "id",
           "type": "INTEGER",
-          "not_null": true,
+          "not_null": false,
           "primary_key": true,
           "default": null
         },
@@ -580,6 +865,46 @@
       "indexes": [
         "CREATE INDEX idx_tasks_plan ON tasks(plan_id)"
       ]
+    },
+    "users": {
+      "description": "가입한 사람. 이메일은 대소문자 구분 없이 유일. 비밀번호는 scrypt 해시만 저장(원문 없음).",
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "not_null": false,
+          "primary_key": true,
+          "default": null
+        },
+        {
+          "name": "email",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "password_hash",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": true,
+          "primary_key": false,
+          "default": null
+        }
+      ],
+      "foreign_keys": [],
+      "indexes": []
     }
+  },
+  "auth_rules": {
+    "password_hash": "scrypt N=32768 r=8 p=1, 계정마다 새 16바이트 소금값",
+    "session": "무작위 32바이트 토큰(HttpOnly·SameSite=Strict 쿠키), DB에는 SHA-256만, 7일 뒤 만료",
+    "ownership": "계획의 user_id가 주인. 할 일·실행 기록·완료·태그는 계획을 통해 주인이 정해지며, 남의 자료는 404로 답한다"
   }
 }

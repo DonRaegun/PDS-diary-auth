@@ -6,17 +6,20 @@ const { open } = require('../db');
 const { createApp } = require('../server');
 
 process.env.PDS_TODAY = '2026-11-10';
-let srv, base, db;
+let srv, base, db, cookie = '';
 test.before(async () => {
   db = open(':memory:');
   srv = http.createServer(createApp(db));
   await new Promise((r) => srv.listen(0, r));
   base = `http://127.0.0.1:${srv.address().port}`;
+  // 7번부터 모든 자료 요청은 로그인이 필요하다: 이 파일의 시험은 가입한 한 사람으로 진행한다
+  const r = await fetch(base + '/api/auth/signup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'api@example.com', password: 'test-password-1234' }) });
+  cookie = r.headers.getSetCookie()[0].split(';')[0];
 });
 test.after(() => { srv.closeAllConnections(); srv.close(); });
 
 async function call(method, url, body, headers = {}) {
-  const r = await fetch(base + url, { method, headers: { 'Content-Type': 'application/json', ...headers }, body: body ? JSON.stringify(body) : undefined });
+  const r = await fetch(base + url, { method, headers: { 'Content-Type': 'application/json', Cookie: cookie, ...headers }, body: body ? JSON.stringify(body) : undefined });
   const text = await r.text();
   let json; try { json = JSON.parse(text); } catch { json = text; }
   return { status: r.status, json };
@@ -133,17 +136,17 @@ test('C33 고칠 점 한 건이 다음 계획으로 넘어가고 중복되지 �
 });
 test('C34,36 저장·내보내기', async () => {
   assert.equal((await call('POST', '/api/review/snapshots', { plan_id: P.id })).status, 201);
-  const r = await fetch(base + '/api/export');
+  const r = await fetch(base + '/api/export', { headers: { Cookie: cookie } });
   assert.match(r.headers.get('content-disposition'), /attachment/);
   const j = await r.json();
-  assert.equal(j.schema, 'pds-schema-v2');
+  assert.equal(j.schema, 'pds-schema-v3');
   for (const k of ['plans', 'plan_revisions', 'tasks', 'task_tags', 'runs', 'completions', 'review_snapshots', 'review_carryovers']) assert.ok(Array.isArray(j.data[k]), k);
   assert.ok(j.data.tasks.find((t) => t.title.startsWith('<script>')));
 });
 test('C57,82 보안 헤더(CSP)와 첫 화면 공개 안내', async () => {
   const r = await fetch(base + '/');
   assert.match(r.headers.get('content-security-policy'), /script-src 'self'/);
-  assert.match(await r.text(), /지금은 로그인이 없어 링크를 아는 사람은 누구나 볼 수 있습니다\. 남이 봐도 괜찮은 내용만 넣으세요/);
+  assert.match(await r.text(), /가입한 사람만 자기 기록을 볼 수 있습니다/);
 });
 test('경로 탈출·없는 주소·메서드', async () => {
   assert.equal((await fetch(base + '/..%2fserver.js')).status, 404);

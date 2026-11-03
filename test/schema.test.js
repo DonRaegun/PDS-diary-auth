@@ -2,9 +2,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { open } = require('../db');
-const contract = require('../contracts/pds-schema-v2.json');
+const contract = require('../contracts/pds-schema-v3.json');
 
-test('contracts/pds-schema-v2.json이 실제 DB 표·항목과 같다', () => {
+test('contracts/pds-schema-v3.json이 실제 DB 표·항목과 같다', () => {
   const db = open(':memory:');
   const names = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((t) => t.name);
   assert.deepEqual(Object.keys(contract.tables).sort(), names);

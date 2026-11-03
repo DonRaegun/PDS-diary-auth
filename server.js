@@ -3,6 +3,8 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { open } = require('./db');
+const { makeAuth } = require('./auth');
+const { makeExperiment } = require('./experiment');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME = {
@@ -77,6 +79,8 @@ function addDays(date, n) {
   return d.toISOString().slice(0, 10);
 }
 
+function sameHost(origin, host) { try { return new URL(origin).host === host; } catch { return false; } }
+
 function createApp(db) {
   const tx = (fn) => {
     db.exec('BEGIN IMMEDIATE');
@@ -102,18 +106,19 @@ function createApp(db) {
     if (p.end_date < p.start_date) throw bad('종료일은 시작일보다 빠를 수 없습니다');
     return p;
   }
-  function planRow(id) {
+  function planRow(id, uid) {
     const p = one(`SELECT p.*,
       (SELECT COUNT(*) FROM tasks t WHERE t.plan_id=p.id AND t.deleted_at IS NULL) AS task_count,
       (SELECT COUNT(*) FROM plan_revisions r WHERE r.plan_id=p.id) AS revision_count
-      FROM plans p WHERE p.id=?`, id);
+      FROM plans p WHERE p.id=? AND p.user_id=?`, id, uid);
+    // 남의 계획도 없는 계획과 똑같이 404로 답한다(존재 여부를 숨김) — 주인 확인의 핵심 위치 ①
     if (!p) throw new HttpError(404, '계획을 찾을 수 없습니다');
     return plain(p);
   }
-  function insertPlan(p, extra = {}) {
+  function insertPlan(uid, p, extra = {}) {
     const t = nowIso();
-    const r = run(`INSERT INTO plans (title,goal,start_date,end_date,priority,success_criteria,estimated_minutes,carried_from_plan_id,carried_text,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?)`, p.title, p.goal, p.start_date, p.end_date, p.priority, p.success_criteria,
+    const r = run(`INSERT INTO plans (user_id,title,goal,start_date,end_date,priority,success_criteria,estimated_minutes,carried_from_plan_id,carried_text,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, uid, p.title, p.goal, p.start_date, p.end_date, p.priority, p.success_criteria,
       p.estimated_minutes, extra.carried_from_plan_id ?? null, extra.carried_text ?? null, t, t);
     const id = Number(r.lastInsertRowid);
     run(`INSERT INTO plan_revisions (plan_id,rev_no,title,goal,start_date,end_date,priority,success_criteria,estimated_minutes,change_note,created_at)
@@ -121,28 +126,28 @@ function createApp(db) {
       p.estimated_minutes, '처음 세운 계획', t);
     return id;
   }
-  function createPlan(b) { return tx(() => planRow(insertPlan(readPlanInput(b)))); }
-  function updatePlan(id, b) {
+  function createPlan(uid, b) { return tx(() => planRow(insertPlan(uid, readPlanInput(b)), uid)); }
+  function updatePlan(uid, id, b) {
     return tx(() => {
-      const cur = planRow(id);
+      const cur = planRow(id, uid);
       const next = readPlanInput({ ...cur, ...b });
       const changed = PLAN_FIELDS.filter((f) => cur[f] !== next[f]);
       if (changed.length) {
         const t = nowIso();
         const rev = one('SELECT MAX(rev_no) m FROM plan_revisions WHERE plan_id=?', id).m + 1;
-        run(`UPDATE plans SET title=?,goal=?,start_date=?,end_date=?,priority=?,success_criteria=?,estimated_minutes=?,updated_at=? WHERE id=?`,
-          next.title, next.goal, next.start_date, next.end_date, next.priority, next.success_criteria, next.estimated_minutes, t, id);
+        run(`UPDATE plans SET title=?,goal=?,start_date=?,end_date=?,priority=?,success_criteria=?,estimated_minutes=?,updated_at=? WHERE id=? AND user_id=?`,
+          next.title, next.goal, next.start_date, next.end_date, next.priority, next.success_criteria, next.estimated_minutes, t, id, uid);
         run(`INSERT INTO plan_revisions (plan_id,rev_no,title,goal,start_date,end_date,priority,success_criteria,estimated_minutes,change_note,created_at)
           VALUES (?,?,?,?,?,?,?,?,?,?,?)`, id, rev, next.title, next.goal, next.start_date, next.end_date, next.priority,
           next.success_criteria, next.estimated_minutes, `바뀐 항목: ${changed.join(', ')}`, t);
       }
-      return planRow(id);
+      return planRow(id, uid);
     });
   }
-  function planDetail(id) {
-    const plan = planRow(id);
+  function planDetail(uid, id) {
+    const plan = planRow(id, uid);
     const revisions = all('SELECT * FROM plan_revisions WHERE plan_id=? ORDER BY rev_no', id).map(plain);
-    const carry = one('SELECT * FROM review_carryovers WHERE from_plan_id=?', id);
+    const carry = one('SELECT * FROM review_carryovers WHERE from_plan_id=?', id); // 위에서 내 계획임을 확인한 뒤의 조회
     return { plan, revisions, carryover: plain(carry) };
   }
 
@@ -163,9 +168,10 @@ function createApp(db) {
     for (const r of all(`SELECT task_id, tag FROM task_tags WHERE task_id IN (${ids.map(() => '?').join(',')}) ORDER BY tag`, ...ids)) map.get(r.task_id).push(r.tag);
     return map;
   }
-  function taskFilter(q) {
-    const where = ['t.deleted_at IS NULL'];
-    const args = [];
+  function taskFilter(uid, q) {
+    // 목록·돌아보기가 모두 이 조건을 지난다: 내 계획에 딸린 할 일만 — 주인 확인의 핵심 위치 ③
+    const where = ['t.deleted_at IS NULL', 't.plan_id IN (SELECT id FROM plans WHERE user_id=?)'];
+    const args = [uid];
     if (q.plan_id) { where.push('t.plan_id=?'); args.push(reqInt(q.plan_id, 'plan_id', 1, 1e9)); }
     if (q.status === 'open' || q.status === 'done') { where.push('t.status=?'); args.push(q.status); }
     else if (q.status && q.status !== 'all') throw bad('status는 open·done·all 중 하나입니다');
@@ -182,8 +188,8 @@ function createApp(db) {
     }
     return { where, args };
   }
-  function listTasks(q) {
-    const { where, args } = taskFilter(q);
+  function listTasks(uid, q) {
+    const { where, args } = taskFilter(uid, q);
     const sortKey = q.sort || 'due';
     const s = SORTS[sortKey];
     if (!s) throw bad('정렬 기준이 올바르지 않습니다');
@@ -207,11 +213,12 @@ function createApp(db) {
       sort: { key: sortKey, dir, label: `${base} → 값이 같으면 마감일 빠른 순 → 우선순위 높은 순 → 등록 번호 순` },
     };
   }
-  function taskRow(id) {
+  function taskRow(id, uid) {
     const r = one(`SELECT t.*, p.title AS plan_title,
       (SELECT COUNT(*) FROM runs r WHERE r.task_id=t.id) AS run_count,
       (SELECT COALESCE(SUM(r.actual_minutes),0) FROM runs r WHERE r.task_id=t.id) AS actual_minutes
-      FROM tasks t JOIN plans p ON p.id=t.plan_id WHERE t.id=? AND t.deleted_at IS NULL`, id);
+      FROM tasks t JOIN plans p ON p.id=t.plan_id WHERE t.id=? AND p.user_id=? AND t.deleted_at IS NULL`, id, uid);
+    // 주인 확인의 핵심 위치 ②: 한 건 조회·고치기·지우기·완료·실행 기록이 모두 여기를 먼저 지난다
     if (!r) throw new HttpError(404, '할 일을 찾을 수 없습니다');
     const t = plain(r);
     t.tags = tagsFor([id]).get(id);
@@ -222,7 +229,7 @@ function createApp(db) {
     run('DELETE FROM task_tags WHERE task_id=?', id);
     for (const g of tags) run('INSERT INTO task_tags (task_id, tag) VALUES (?,?)', id, g);
   }
-  function createTask(b) {
+  function createTask(uid, b) {
     const planId = reqInt(b.plan_id, '계획', 1, 1e9);
     const d = {
       title: reqText(b.title, '할 일 이름'), note: optText(b.note, '메모'), due_date: optDate(b.due_date, '마감일'),
@@ -230,18 +237,18 @@ function createApp(db) {
     };
     const tags = parseTags(b.tags);
     return tx(() => {
-      planRow(planId);
+      planRow(planId, uid);
       const t = nowIso();
       const r = run(`INSERT INTO tasks (plan_id,title,note,due_date,priority,estimated_minutes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`,
         planId, d.title, d.note, d.due_date, d.priority, d.estimated_minutes, t, t);
       const id = Number(r.lastInsertRowid);
       setTags(id, tags);
-      return taskRow(id);
+      return taskRow(id, uid);
     });
   }
-  function updateTask(id, b) {
+  function updateTask(uid, id, b) {
     return tx(() => {
-      const cur = taskRow(id);
+      const cur = taskRow(id, uid);
       const merged = { ...cur, ...b };
       const d = {
         title: reqText(merged.title, '할 일 이름'), note: optText(merged.note, '메모'), due_date: optDate(merged.due_date, '마감일'),
@@ -251,20 +258,20 @@ function createApp(db) {
       run('UPDATE tasks SET title=?,note=?,due_date=?,priority=?,estimated_minutes=?,updated_at=? WHERE id=?',
         d.title, d.note, d.due_date, d.priority, d.estimated_minutes, nowIso(), id);
       setTags(id, tags);
-      return taskRow(id);
+      return taskRow(id, uid);
     });
   }
-  function deleteTask(id) {
+  function deleteTask(uid, id) {
     return tx(() => {
-      taskRow(id);
+      taskRow(id, uid);
       run('UPDATE tasks SET deleted_at=?, updated_at=? WHERE id=?', nowIso(), nowIso(), id);
       return { deleted: true, id };
     });
   }
   // 완료: 같은 요청 키·할 일 상태·DB 부분 유일 인덱스 세 겹으로 중복을 막는다
-  function completeTask(id, key) {
+  function completeTask(uid, id, key) {
     return tx(() => {
-      const cur = taskRow(id);
+      const cur = taskRow(id, uid);
       if (key) {
         const prev = one('SELECT task_id FROM completions WHERE idempotency_key=?', key);
         if (prev) {
@@ -278,25 +285,25 @@ function createApp(db) {
       try {
         run('INSERT INTO completions (task_id, idempotency_key, completed_at) VALUES (?,?,?)', id, key || null, t);
       } catch (e) {
-        if (/UNIQUE/i.test(e.message)) return { task: taskRow(id), counted: false };
+        if (/UNIQUE/i.test(e.message)) return { task: taskRow(id, uid), counted: false };
         throw e;
       }
-      return { task: taskRow(id), counted: true };
+      return { task: taskRow(id, uid), counted: true };
     });
   }
-  function reopenTask(id) {
+  function reopenTask(uid, id) {
     return tx(() => {
-      const cur = taskRow(id);
+      const cur = taskRow(id, uid);
       if (cur.status !== 'done') return { task: cur, reopened: false };
       const t = nowIso();
       run("UPDATE tasks SET status='open', completed_at=NULL, updated_at=? WHERE id=?", t, id);
       run('UPDATE completions SET reverted_at=? WHERE task_id=? AND reverted_at IS NULL', t, id);
-      return { task: taskRow(id), reopened: true };
+      return { task: taskRow(id, uid), reopened: true };
     });
   }
 
   // ---------- 실행 기록 ----------
-  function createRun(taskId, b, key) {
+  function createRun(uid, taskId, b, key) {
     const started = toUtcIso(b.started_at, '시작 시각');
     const ended = toUtcIso(b.ended_at, '끝난 시각');
     if (ended < started) throw bad('끝난 시각은 시작 시각보다 빠를 수 없습니다');
@@ -306,7 +313,7 @@ function createApp(db) {
     } else actual = minutesOf(b.actual_minutes, '실제 걸린 시간');
     const reason = optText(b.blocked_reason, '막혔던 이유', 1000);
     return tx(() => {
-      taskRow(taskId);
+      taskRow(taskId, uid);
       if (key) {
         const prev = one('SELECT * FROM runs WHERE idempotency_key=?', key);
         if (prev) {
@@ -319,9 +326,9 @@ function createApp(db) {
       return { run: plain(one('SELECT * FROM runs WHERE id=?', Number(r.lastInsertRowid))), created: true };
     });
   }
-  function listRuns(q) {
-    const where = ['t.deleted_at IS NULL'];
-    const args = [];
+  function listRuns(uid, q) {
+    const where = ['t.deleted_at IS NULL', 'p.user_id=?'];
+    const args = [uid];
     if (q.task_id) { where.push('r.task_id=?'); args.push(reqInt(q.task_id, 'task_id', 1, 1e9)); }
     if (q.plan_id) { where.push('t.plan_id=?'); args.push(reqInt(q.plan_id, 'plan_id', 1, 1e9)); }
     if (q.blocked === '1') where.push("TRIM(r.blocked_reason)<>''");
@@ -333,14 +340,14 @@ function createApp(db) {
   }
 
   // ---------- 돌아보기 ----------
-  function review(q) {
+  function review(uid, q) {
     const f = {};
     if (q.plan_id) f.plan_id = String(reqInt(q.plan_id, 'plan_id', 1, 1e9));
     if (q.from) f.due_from = reqDate(q.from, 'from');
     if (q.to) f.due_to = reqDate(q.to, 'to');
     if (f.due_from && f.due_to && f.due_to < f.due_from) throw bad('기간의 끝이 시작보다 빠릅니다');
     const today = seoulToday();
-    const { where, args } = taskFilter(f);
+    const { where, args } = taskFilter(uid, f);
     const W = where.join(' AND ');
     const m = one(`SELECT
       COUNT(*) AS plan_count,
@@ -357,87 +364,105 @@ function createApp(db) {
     const qs = new URLSearchParams(f).toString();
     return { today, timezone: 'Asia/Seoul', unit: 'minutes', filter: f, metrics: out, drill_query: qs };
   }
-  function saveSnapshot(b) {
-    const r = review(b);
+  function saveSnapshot(uid, b) {
+    const r = review(uid, b);
     const t = nowIso();
-    const res = run('INSERT INTO review_snapshots (plan_id,from_date,to_date,today,metrics_json,created_at) VALUES (?,?,?,?,?,?)',
-      r.filter.plan_id ? Number(r.filter.plan_id) : null, r.filter.due_from || null, r.filter.due_to || null, r.today, JSON.stringify(r.metrics), t);
+    const res = run('INSERT INTO review_snapshots (user_id,plan_id,from_date,to_date,today,metrics_json,created_at) VALUES (?,?,?,?,?,?,?)',
+      uid, r.filter.plan_id ? Number(r.filter.plan_id) : null, r.filter.due_from || null, r.filter.due_to || null, r.today, JSON.stringify(r.metrics), t);
     return { id: Number(res.lastInsertRowid), ...r, created_at: t };
   }
-  function listSnapshots() {
-    return all('SELECT * FROM review_snapshots ORDER BY id DESC LIMIT 50').map((s) => ({ ...s, metrics: JSON.parse(s.metrics_json), metrics_json: undefined }));
+  function listSnapshots(uid) {
+    return all('SELECT * FROM review_snapshots WHERE user_id=? ORDER BY id DESC LIMIT 50', uid).map((s) => ({ ...s, metrics: JSON.parse(s.metrics_json), metrics_json: undefined }));
   }
-  function carryOver(b) {
+  function carryOver(uid, b) {
     const fromId = reqInt(b.from_plan_id, '돌아본 계획', 1, 1e9);
     const text = reqText(b.text, '고칠 점', 300);
     return tx(() => {
-      const src = planRow(fromId);
+      const src = planRow(fromId, uid);
       const prev = one('SELECT * FROM review_carryovers WHERE from_plan_id=?', fromId);
-      if (prev) return { carryover: plain(prev), next_plan: planRow(prev.to_plan_id), created: false };
+      if (prev) return { carryover: plain(prev), next_plan: planRow(prev.to_plan_id, uid), created: false };
       const today = seoulToday();
-      const id = insertPlan({
+      const id = insertPlan(uid, {
         title: reqText(b.next_title || `다음 계획: ${text}`.slice(0, 120), '다음 계획 이름'),
         goal: `「${src.title}」 돌아보기에서 넘어옴`,
         start_date: today, end_date: addDays(today, 7), priority: 2,
         success_criteria: text, estimated_minutes: minutesOf(b.estimated_minutes ?? 60, '예상 시간'),
       }, { carried_from_plan_id: fromId, carried_text: text });
       const r = run('INSERT INTO review_carryovers (from_plan_id,to_plan_id,text,created_at) VALUES (?,?,?,?)', fromId, id, text, nowIso());
-      return { carryover: plain(one('SELECT * FROM review_carryovers WHERE id=?', Number(r.lastInsertRowid))), next_plan: planRow(id), created: true };
+      return { carryover: plain(one('SELECT * FROM review_carryovers WHERE id=?', Number(r.lastInsertRowid))), next_plan: planRow(id, uid), created: true };
     });
   }
 
   // ---------- 내보내기 ----------
-  function exportAll() {
+  function exportAll(uid, email) {
+    const P = '(SELECT id FROM plans WHERE user_id=?)';
+    const T = `(SELECT id FROM tasks WHERE plan_id IN ${P})`;
     return {
-      app: 'plandoosee-diary', schema: 'pds-schema-v2', exported_at: nowIso(), timezone: 'Asia/Seoul',
+      app: 'plandoosee-diary', schema: 'pds-schema-v3', exported_at: nowIso(), timezone: 'Asia/Seoul',
+      owner: { email }, // 비밀번호 해시·세션은 내보내지 않는다
       units: { time: 'minutes', date: 'YYYY-MM-DD (Asia/Seoul calendar date)', timestamp: 'UTC ISO-8601', priority: '1 high · 2 medium · 3 low' },
       data: {
-        plans: all('SELECT * FROM plans ORDER BY id').map(plain),
-        plan_revisions: all('SELECT * FROM plan_revisions ORDER BY plan_id, rev_no').map(plain),
-        tasks: all('SELECT * FROM tasks ORDER BY id').map(plain),
-        task_tags: all('SELECT * FROM task_tags ORDER BY task_id, tag').map(plain),
-        runs: all('SELECT * FROM runs ORDER BY id').map(plain),
-        completions: all('SELECT * FROM completions ORDER BY id').map(plain),
-        review_snapshots: all('SELECT * FROM review_snapshots ORDER BY id').map(plain),
-        review_carryovers: all('SELECT * FROM review_carryovers ORDER BY id').map(plain),
+        plans: all('SELECT * FROM plans WHERE user_id=? ORDER BY id', uid).map(plain),
+        plan_revisions: all(`SELECT * FROM plan_revisions WHERE plan_id IN ${P} ORDER BY plan_id, rev_no`, uid).map(plain),
+        tasks: all(`SELECT * FROM tasks WHERE plan_id IN ${P} ORDER BY id`, uid).map(plain),
+        task_tags: all(`SELECT * FROM task_tags WHERE task_id IN ${T} ORDER BY task_id, tag`, uid).map(plain),
+        runs: all(`SELECT * FROM runs WHERE task_id IN ${T} ORDER BY id`, uid).map(plain),
+        completions: all(`SELECT * FROM completions WHERE task_id IN ${T} ORDER BY id`, uid).map(plain),
+        review_snapshots: all('SELECT * FROM review_snapshots WHERE user_id=? ORDER BY id', uid).map(plain),
+        review_carryovers: all(`SELECT * FROM review_carryovers WHERE from_plan_id IN ${P} ORDER BY id`, uid).map(plain),
+        experiment: experiment.view(uid),
       },
     };
   }
 
   // ---------- 라우팅 ----------
+  // { public: true } 인 길만 로그인 없이 열린다. 나머지는 handler에서 세션을 확인한 뒤에만 실행된다.
   const ROUTES = [];
-  const route = (method, pattern, fn) => ROUTES.push({ method, re: new RegExp('^' + pattern.replace(/:(\w+)/g, '(?<$1>\\d+)') + '$'), fn });
+  const route = (method, pattern, fn, opts = {}) => ROUTES.push({ method, re: new RegExp('^' + pattern.replace(/:(\w+)/g, '(?<$1>\\d+)') + '$'), fn, public: !!opts.public });
   const idOf = (m, k = 'id') => Number(m.groups[k]);
+  const experiment = makeExperiment(db, { HttpError, bad, nowIso, seoulToday, isDate, reqText, reqInt });
+  const auth = makeAuth(db, { HttpError, bad, nowIso });
 
-  route('GET', '/api/health', () => ({ ok: true, today: seoulToday() }));
+  route('GET', '/api/health', () => ({ ok: true, today: seoulToday() }), { public: true });
+  route('POST', '/api/auth/signup', (c) => auth.signup(c), { public: true });
+  route('POST', '/api/auth/login', (c) => auth.login(c), { public: true });
+  route('GET', '/api/auth/me', (c) => ({ user: { id: c.user.id, email: c.user.email } }));
+  route('POST', '/api/auth/logout', (c) => auth.logout(c));
+  route('POST', '/api/auth/password', (c) => auth.changePassword(c));
+  route('DELETE', '/api/auth/account', (c) => auth.deleteAccount(c));
+
   route('GET', '/api/meta', () => ({ today: seoulToday(), timezone: 'Asia/Seoul', sorts: Object.fromEntries(Object.entries(SORTS).map(([k, v]) => [k, v.label])) }));
-  route('GET', '/api/plans', () => ({ plans: all(`SELECT p.*,
+  route('GET', '/api/plans', (c) => ({ plans: all(`SELECT p.*,
     (SELECT COUNT(*) FROM tasks t WHERE t.plan_id=p.id AND t.deleted_at IS NULL) AS task_count,
-    (SELECT COUNT(*) FROM plan_revisions r WHERE r.plan_id=p.id) AS revision_count FROM plans p ORDER BY p.id`).map(plain) }));
-  route('POST', '/api/plans', (c) => [201, createPlan(c.body)]);
-  route('GET', '/api/plans/:id', (c) => planDetail(idOf(c.m)));
-  route('PUT', '/api/plans/:id', (c) => updatePlan(idOf(c.m), c.body));
-  route('GET', '/api/tasks', (c) => listTasks(c.query));
-  route('POST', '/api/tasks', (c) => [201, createTask(c.body)]);
-  route('GET', '/api/tasks/:id', (c) => taskRow(idOf(c.m)));
-  route('PUT', '/api/tasks/:id', (c) => updateTask(idOf(c.m), c.body));
-  route('DELETE', '/api/tasks/:id', (c) => deleteTask(idOf(c.m)));
-  route('POST', '/api/tasks/:id/complete', (c) => completeTask(idOf(c.m), keyOf(c)));
-  route('POST', '/api/tasks/:id/reopen', (c) => reopenTask(idOf(c.m)));
-  route('GET', '/api/tasks/:id/runs', (c) => ({ runs: listRuns({ task_id: String(idOf(c.m)) }) }));
-  route('POST', '/api/tasks/:id/runs', (c) => { const r = createRun(idOf(c.m), c.body, keyOf(c)); return [r.created ? 201 : 200, r]; });
-  route('GET', '/api/runs', (c) => ({ runs: listRuns(c.query) }));
-  route('GET', '/api/review', (c) => review(c.query));
-  route('GET', '/api/review/snapshots', () => ({ snapshots: listSnapshots() }));
-  route('POST', '/api/review/snapshots', (c) => [201, saveSnapshot(c.body)]);
-  route('POST', '/api/review/carry', (c) => { const r = carryOver(c.body); return [r.created ? 201 : 200, r]; });
-  route('GET', '/api/export', () => ({ __download: 'plandoosee-export.json', body: exportAll() }));
+    (SELECT COUNT(*) FROM plan_revisions r WHERE r.plan_id=p.id) AS revision_count FROM plans p WHERE p.user_id=? ORDER BY p.id`, c.user.id).map(plain) }));
+  route('POST', '/api/plans', (c) => [201, createPlan(c.user.id, c.body)]);
+  route('GET', '/api/plans/:id', (c) => planDetail(c.user.id, idOf(c.m)));
+  route('PUT', '/api/plans/:id', (c) => updatePlan(c.user.id, idOf(c.m), c.body));
+  route('GET', '/api/tasks', (c) => listTasks(c.user.id, c.query));
+  route('POST', '/api/tasks', (c) => [201, createTask(c.user.id, c.body)]);
+  route('GET', '/api/tasks/:id', (c) => taskRow(idOf(c.m), c.user.id));
+  route('PUT', '/api/tasks/:id', (c) => updateTask(c.user.id, idOf(c.m), c.body));
+  route('DELETE', '/api/tasks/:id', (c) => deleteTask(c.user.id, idOf(c.m)));
+  route('POST', '/api/tasks/:id/complete', (c) => completeTask(c.user.id, idOf(c.m), keyOf(c)));
+  route('POST', '/api/tasks/:id/reopen', (c) => reopenTask(c.user.id, idOf(c.m)));
+  route('GET', '/api/tasks/:id/runs', (c) => { taskRow(idOf(c.m), c.user.id); return { runs: listRuns(c.user.id, { task_id: String(idOf(c.m)) }) }; });
+  route('POST', '/api/tasks/:id/runs', (c) => { const r = createRun(c.user.id, idOf(c.m), c.body, keyOf(c)); return [r.created ? 201 : 200, r]; });
+  route('GET', '/api/runs', (c) => ({ runs: listRuns(c.user.id, c.query) }));
+  route('GET', '/api/review', (c) => review(c.user.id, c.query));
+  route('GET', '/api/review/snapshots', (c) => ({ snapshots: listSnapshots(c.user.id) }));
+  route('POST', '/api/review/snapshots', (c) => [201, saveSnapshot(c.user.id, c.body)]);
+  route('POST', '/api/review/carry', (c) => { const r = carryOver(c.user.id, c.body); return [r.created ? 201 : 200, r]; });
+  route('GET', '/api/export', (c) => ({ __download: 'plandoosee-export.json', body: exportAll(c.user.id, c.user.email) }));
+  route('GET', '/api/experiment', (c) => experiment.view(c.user.id));
+  route('POST', '/api/experiment', (c) => [201, experiment.create(c.user.id, c.body)]);
+  route('POST', '/api/experiment/records', (c) => [201, experiment.addRecord(c.user.id, c.body)]);
+  route('POST', '/api/experiment/rule-change', (c) => [201, experiment.changeRule(c.user.id, c.body)]);
 
   function keyOf(c) {
     const k = c.headers['idempotency-key'];
     if (k === undefined) return null;
     if (!/^[A-Za-z0-9_.:-]{8,100}$/.test(k)) throw bad('Idempotency-Key 형식이 올바르지 않습니다');
-    return k;
+    return `${c.user.id}:${k}`; // 요청 키도 계정별로 따로 쓴다(남의 키와 부딪히지 않고, 남의 키 존재도 알 수 없다)
   }
 
   function readBody(req) {
@@ -476,12 +501,19 @@ function createApp(db) {
           if (!m) continue;
           matchedPath = true;
           if (r.method !== req.method) continue;
-          const body = ['POST', 'PUT', 'PATCH'].includes(req.method) ? await readBody(req) : {};
-          const out = r.fn({ m, body, query: Object.fromEntries(url.searchParams), headers: req.headers });
+          // 다른 사이트에서 온 쓰기 요청은 거절한다 (쿠키는 SameSite=Strict이기도 하다)
+          if (req.method !== 'GET' && req.headers.origin && !sameHost(req.headers.origin, req.headers.host)) throw new HttpError(403, '다른 사이트에서 보낸 요청은 받지 않습니다');
+          // 세션 확인: 공개 길이 아니면 로그인한 사람만 통과 — 인증 확인 위치
+          const user = auth.userFromRequest(req);
+          if (!r.public && !user) throw new HttpError(401, '로그인이 필요합니다');
+          const body = ['POST', 'PUT', 'PATCH'].includes(req.method) || r.method === 'DELETE' ? await readBody(req) : {};
+          const cookies = [];
+          const out = await r.fn({ m, body, query: Object.fromEntries(url.searchParams), headers: req.headers, req, user, cookies });
+          const extra = cookies.length ? { 'Set-Cookie': cookies } : {};
           if (out && out.__download) {
-            return send(res, 200, JSON.stringify(out.body, null, 2), { 'Content-Disposition': `attachment; filename="${out.__download}"` });
+            return send(res, 200, JSON.stringify(out.body, null, 2), { ...extra, 'Content-Disposition': `attachment; filename="${out.__download}"` });
           }
-          return Array.isArray(out) ? send(res, out[0], out[1]) : send(res, 200, out);
+          return Array.isArray(out) ? send(res, out[0], out[1], extra) : send(res, 200, out, extra);
         }
         throw new HttpError(matchedPath ? 405 : 404, matchedPath ? '허용되지 않는 요청 방식입니다' : '없는 주소입니다');
       }
