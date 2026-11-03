@@ -4,6 +4,7 @@
 // ---------- 가입·로그인 ----------
 function showAuth(note) {
   document.getElementById('nav').hidden = true;
+  document.getElementById('notice').hidden = false;
   let mode = 'login';
   const draw = () => {
     const f = h('form', { class: 'grid auth', onsubmit: guard(async (e) => {
@@ -27,6 +28,7 @@ function showAuth(note) {
 }
 function enterApp() {
   document.getElementById('nav').hidden = false;
+  document.getElementById('notice').hidden = true;
   document.getElementById('who').textContent = me.email;
   render();
 }
