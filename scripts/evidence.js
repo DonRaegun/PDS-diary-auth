@@ -157,6 +157,16 @@ async function main() {
   await rec('거절(로그아웃 뒤, 같은 쿠키)', 'GET', '/api/plans', { cookie: L2.cookie });
   void A; void same1;
 
+  // ----- 카드 5: 내보내기와 계정 삭제 -----
+  say(); say('### 내 자료 내보내기와 계정 삭제'); say();
+  const L3 = await rec('', 'POST', '/api/auth/login', { body: { email: mail('a'), password: PA }, show: false });
+  const ex = await rec('', 'GET', '/api/export', { cookie: L3.cookie, show: false });
+  say(`내보내기 \`GET /api/export\` → ${ex.status}, 파일 한 개(JSON). 들어 있는 항목: ${Object.keys(ex.json || {}).join(', ')}. 비밀번호·해시 포함 여부: ${/scrypt\$|"password/i.test(ex.text) ? '있음(문제!)' : '없음'}, 남의 자료("B의") 포함 여부: ${ex.text.includes('B의') ? '있음(문제!)' : '없음'}`); say();
+  const bBefore = await count(CB);
+  await rec('계정 A를 지움(비밀번호 확인)', 'DELETE', '/api/auth/account', { cookie: L3.cookie, body: { password: PA } });
+  await rec('지운 계정의 같은 쿠키로 요청', 'GET', '/api/plans', { cookie: L3.cookie });
+  say(`다른 계정(B)의 자료 — 지우기 전: ${bBefore} / 지운 뒤: ${await count(CB)} (A만 지워지고 B는 그대로)`); say();
+
   // ----- 원문 검사 -----
   const all = out.join('\n');
   const leaked = [...secrets].filter((s) => s.length >= 8 && all.includes(s));

@@ -5,24 +5,31 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>플랜두씨 다이어리</title>
 <link rel="stylesheet" href="style.css">
+<script src="theme.js"></script>
 </head>
 <body>
-<header>
-  <h1><a href="#/">플랜두씨 다이어리</a></h1>
-  <nav id="nav" hidden>
-    <a href="#/" data-nav="home">계획</a>
-    <a href="#/tasks" data-nav="tasks">할 일</a>
-    <a href="#/runs" data-nav="runs">실행 기록</a>
-    <a href="#/review" data-nav="review">돌아보기</a>
-    <a href="#/experiment" data-nav="experiment">5일 관찰</a>
-    <a href="#/account" data-nav="account" id="who"></a>
-    <button type="button" id="logout" class="ghost">로그아웃</button>
-  </nav>
-</header>
-<p id="notice" role="note">가입한 사람만 자기 기록을 볼 수 있습니다. 로그인하지 않으면 어떤 기록도 보이지 않습니다.</p>
-<div id="toast" role="status" aria-live="polite"></div>
-<main id="app">불러오는 중…</main>
-<footer>시간은 모두 서울(Asia/Seoul) 기준, 시간 양은 분 단위로 저장·표시합니다.</footer>
+<div class="shell">
+  <aside id="nav" hidden>
+    <a class="brand" href="#/"><span class="logo">P</span><span class="brand-name">Plan·Do·See</span></a>
+    <nav>
+      <a href="#/" data-nav="home"><svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg><span>홈</span></a>
+      <a href="#/tasks" data-nav="tasks"><svg viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12M3 6l1.5 1.5L7 5M3 12l1.5 1.5L7 11M3 18l1.5 1.5L7 17"/></svg><span>할 일</span></a>
+      <a href="#/runs" data-nav="runs"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>실행 기록</span></a>
+      <a href="#/review" data-nav="review"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg><span>돌아보기</span></a>
+      <a href="#/account" data-nav="account"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg><span>내 계정</span></a>
+    </nav>
+    <div class="side-foot">
+      <span id="who" title="로그인한 계정"></span>
+      <button type="button" id="logout" class="ghost">로그아웃</button>
+    </div>
+  </aside>
+  <div class="content">
+    <div id="toast" role="status" aria-live="polite"></div>
+    <main id="app">불러오는 중…</main>
+    <p id="notice" role="note">가입한 사람만 자기 기록을 볼 수 있습니다. 로그인하지 않으면 어떤 기록도 보이지 않습니다.</p>
+    <footer>시간은 모두 서울(Asia/Seoul) 기준, 시간 양은 분 단위로 저장·표시합니다.</footer>
+  </div>
+</div>
 <script src="app.js"></script>
 <script src="auth-ui.js"></script>
 </body>

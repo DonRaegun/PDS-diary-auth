@@ -78,7 +78,7 @@ async function render() {
   if (!me) return showAuth();
   const { parts, query } = parseHash();
   const name = parts[0] || 'home';
-  document.querySelectorAll('nav a[data-nav]').forEach((a) => a.classList.toggle('on', a.dataset.nav === (name === 'plan' ? 'home' : name)));
+  document.querySelectorAll('nav a[data-nav]').forEach((a) => a.classList.toggle('on', a.dataset.nav === (name === 'plan' ? 'home' : name === 'experiment' ? 'review' : name)));
   $app.replaceChildren(h('p', { class: 'muted' }, '불러오는 중…'));
   const view = views[name];
   try {
@@ -94,35 +94,64 @@ window.addEventListener('hashchange', render);
 function planFormFields(p = {}) {
   const today = new Date().toISOString().slice(0, 10);
   return [
-    field('계획 이름', h('input', { name: 'title', required: true, maxlength: 200, value: p.title || '' })),
+    field('계획 이름', h('input', { name: 'title', placeholder: '예) 이번 주 보고서 끝내기', required: true, maxlength: 200, value: p.title || '' })),
     field('시작일', h('input', { name: 'start_date', type: 'date', required: true, value: p.start_date || today })),
     field('종료일', h('input', { name: 'end_date', type: 'date', required: true, value: p.end_date || today })),
     field('우선순위', select('priority', priOptions, p.priority || 2)),
-    field('예상 시간(분)', h('input', { name: 'estimated_minutes', type: 'number', min: 0, required: true, value: p.estimated_minutes ?? 60 })),
-    h('label', { class: 'wide' }, '성공 기준', h('input', { name: 'success_criteria', required: true, maxlength: 1000, value: p.success_criteria || '' })),
-    h('label', { class: 'wide' }, '목표(선택)', h('input', { name: 'goal', maxlength: 2000, value: p.goal || '' })),
+    h('label', {}, '예상 시간(분, 60 = 1시간)', h('input', { name: 'estimated_minutes', type: 'number', min: 0, required: true, value: p.estimated_minutes ?? 60 })),
+    h('label', { class: 'wide' }, '어떻게 되면 성공인가요? (성공 기준)', h('input', { name: 'success_criteria', placeholder: '예) 보고서 5쪽을 완성해 제출한다', required: true, maxlength: 1000, value: p.success_criteria || '' })),
+    h('label', { class: 'wide' }, '왜 하나요? (목표, 비워 둬도 됩니다)', h('input', { name: 'goal', placeholder: '예) 금요일 회의에서 발표하려고', maxlength: 2000, value: p.goal || '' })),
   ];
 }
 
+const seoulDay = (d = new Date()) => seoulFmt.format(d).slice(0, 10);
+const todayLabel = () => new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
+
 views.home = async () => {
-  const { plans } = await api('GET', '/api/plans');
+  const [{ plans }, { tasks }, { runs }, rv] = await Promise.all([api('GET', '/api/plans'), api('GET', '/api/tasks'), api('GET', '/api/runs'), api('GET', '/api/review')]);
   const form = h('form', { class: 'grid', onsubmit: guard(async (e) => {
     e.preventDefault();
     const p = await api('POST', '/api/plans', formData(form));
     toast('계획을 저장했습니다');
     location.hash = '#/plan/' + p.id;
   }) }, planFormFields(), h('button', { type: 'submit' }, '계획 만들기'));
+
+  const open = tasks.filter((t) => t.status !== 'done').sort((x, y) => (y.overdue - x.overdue) || String(x.due_date || '9').localeCompare(String(y.due_date || '9'))).slice(0, 5);
+  const today = seoulDay();
+  const todayRuns = runs.filter((r) => r.started_at && seoulDay(new Date(r.started_at)) === today);
+  const recent = [...runs].sort((x, y) => String(y.started_at).localeCompare(String(x.started_at))).slice(0, 3);
+  const m = rv.metrics;
+  const check = (t) => h('input', { type: 'checkbox', 'aria-label': `「${t.title}」 완료`, onchange: guard(async () => {
+    const r = await api('POST', `/api/tasks/${t.id}/complete`, null, { 'Idempotency-Key': keyFor('c', t.id) });
+    pendingKeys.delete('c' + t.id); toast(r.counted ? '완료로 바꿨습니다' : '이미 완료로 기록되어 있습니다'); render();
+  }) });
+
+  const planCard = h('div', { class: 'card plan' }, h('span', { class: 'pill' }, 'PLAN'), h('h3', {}, '해야 할 일'),
+    open.length ? h('ul', { class: 'todo' }, open.map((t) => h('li', {}, check(t), h('span', {}, link('#/tasks?plan_id=' + t.plan_id, t.title), t.overdue ? h('span', { class: 'badge late' }, '지연') : null,
+      h('span', { class: 'sub' }, '마감 ' + (t.due_date || '없음') + ' · 예상 ' + fmtMin(t.estimated_minutes)))))) : h('p', { class: 'muted small' }, plans.length ? '진행 중인 할 일이 없습니다.' : '먼저 아래에서 계획을 만들어 보세요.'),
+    h('div', { class: 'foot' }, link('#/tasks', '할 일 전체 보기 →')));
+  const doCard = h('div', { class: 'card do' }, h('span', { class: 'pill' }, 'DO'), h('h3', {}, '실제로 한 일'),
+    h('div', { class: 'big' }, fmtMin(todayRuns.reduce((n, r) => n + r.actual_minutes, 0))), h('div', { class: 'small muted' }, `오늘 실행 기록 ${todayRuns.length}건`),
+    recent.length ? h('div', {}, recent.map((r) => h('div', { class: 'kv' }, h('span', {}, r.task_title), h('span', { class: 'muted' }, fmtMin(r.actual_minutes))))) : h('p', { class: 'muted small' }, '아직 실행 기록이 없습니다. 할 일의 「실행 기록」 버튼으로 남기세요.'),
+    h('div', { class: 'foot' }, link('#/runs', '실행 기록 보기 →')));
+  const seeCard = h('div', { class: 'card see' }, h('span', { class: 'pill' }, 'SEE'), h('h3', {}, '돌아보기'),
+    h('div', {}, h('div', { class: 'kv' }, h('span', {}, '완료'), h('b', {}, m.done_count)), h('div', { class: 'kv' }, h('span', {}, '지연'), h('b', {}, m.overdue_count)),
+      h('div', { class: 'kv' }, h('span', {}, '실제 − 예상'), h('b', {}, (m.diff_minutes > 0 ? '+' : '') + fmtMin(m.diff_minutes)))),
+    h('div', { class: 'foot' }, link('#/review', '돌아보기 열기 →'), ' · ', link('#/experiment', '5일 점검')));
+
   return h('div', {},
+    h('div', { class: 'hello' }, h('h2', {}, `안녕하세요, ${me.email.split('@')[0]}님`), h('p', {}, todayLabel())),
+    h('div', { class: 'pds' }, planCard, doCard, seeCard),
     h('h2', {}, '내 계획'),
     plans.length ? null : h('div', { class: 'card small' }, h('b', {}, '처음이라면 이 순서로 써 보세요'),
       h('ol', {}, h('li', {}, '아래 「새 계획」에 이번 주 계획 하나를 만듭니다.'), h('li', {}, '위쪽 「할 일」에서 그 계획에 할 일을 넣고, 한 일은 [완료]를 누릅니다.'),
-        h('li', {}, '「돌아보기」에서 계획한 시간과 실제 시간을 비교합니다.'), h('li', {}, '인증 과제 확인은 「5일 관찰」과 「내 계정」에서 합니다.'))),
+        h('li', {}, '「돌아보기」에서 계획한 시간과 실제 시간을 비교합니다.'), h('li', {}, '5일 동안 계획과 실제의 차이를 보고 싶다면 「돌아보기」 맨 위의 「5일 점검」을 쓰세요.'))),
     plans.length ? h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {}, ['ID', '계획', '기간', '우선순위', '성공 기준', '예상 시간', '할 일', '수정 횟수'].map((t) => h('th', {}, t)))),
       h('tbody', {}, plans.map((p) => h('tr', {},
         h('td', {}, 'PLAN-' + p.id), h('td', {}, link('#/plan/' + p.id, p.title), p.carried_from_plan_id ? h('div', { class: 'small muted' }, `PLAN-${p.carried_from_plan_id} 돌아보기에서 넘어옴`) : null),
         h('td', {}, `${p.start_date} ~ ${p.end_date}`), h('td', {}, PRI[p.priority]), h('td', {}, p.success_criteria),
-        h('td', {}, fmtMin(p.estimated_minutes)), h('td', {}, link(`#/tasks?plan_id=${p.id}`, p.task_count + '개')), h('td', {}, p.revision_count - 1 + '번')))))) : h('p', { class: 'muted' }, '아직 계획이 없습니다. 아래에서 만들어 보세요.'),
+        h('td', {}, fmtMin(p.estimated_minutes)), h('td', {}, link(`#/tasks?plan_id=${p.id}`, p.task_count + '개')), h('td', {}, p.revision_count - 1 + '번')))))) : null,
     h('h2', {}, '새 계획'), h('div', { class: 'card' }, form));
 };
 
@@ -146,7 +175,7 @@ views.plan = async (parts) => {
       plan.goal ? h('div', {}, '목표: ', plan.goal) : null,
       plan.carried_text ? h('div', { class: 'muted' }, `PLAN-${plan.carried_from_plan_id}의 돌아보기에서 넘어온 고칠 점: `, plan.carried_text) : null,
       carryover ? h('div', {}, '이 계획의 돌아보기에서 넘긴 다음 계획: ', link('#/plan/' + carryover.to_plan_id, 'PLAN-' + carryover.to_plan_id), ' — ', carryover.text) : null,
-      h('div', { class: 'row mt' }, link(`#/tasks?plan_id=${id}`, `할 일 ${plan.task_count}개 보기`), ' · ', link(`#/review?plan_id=${id}`, '이 계획 돌아보기'))),
+      h('div', { class: 'row mt' }, link(`#/tasks?plan_id=${id}`, plan.task_count ? `할 일 ${plan.task_count}개 보기` : '이 계획의 할 일 추가하러 가기 →'), ' · ', link(`#/review?plan_id=${id}`, '이 계획 돌아보기'))),
     h('h3', {}, '수정 이력 (고치기 전 내용도 그대로 남습니다)'),
     h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {}, ['버전', '저장 시각(서울)', ...fields.map((f) => f[1]), '변경'].map((t) => h('th', {}, t)))),
@@ -200,12 +229,12 @@ views.tasks = async (parts, q) => {
   if (!plans.length) addForm.querySelector('button').disabled = true;
 
   return h('div', {},
-    h('h2', {}, `할 일 (${data.tasks.length}개)`),
+    h('div', { class: 'row' }, h('h2', {}, `할 일 (${data.tasks.length}개)`), h('button', { type: 'button', class: 'ghost', onclick: () => document.getElementById('newtask').scrollIntoView({ behavior: 'smooth' }) }, '+ 새 할 일 쓰기')),
     h('div', { class: 'card' }, filter, chips.length ? h('div', { class: 'small mt' }, '추가 조건: ', chips.join(' · '), ' ', link('#/tasks', '조건 풀기')) : null),
     h('div', { class: 'sortnote small' }, h('b', {}, '현재 정렬: '), data.sort.label, h('br'), `지연 기준일: 오늘(서울) ${data.today}. 거르기·정렬은 서버(DB)에서 합니다.`),
     data.tasks.length ? h('div', { class: 'tasklist' }, data.tasks.map(taskRows))
     : h('p', { class: 'muted' }, '조건에 맞는 할 일이 없습니다.'),
-    h('h2', {}, '새 할 일'), h('div', { class: 'card' }, addForm));
+    h('h2', { id: 'newtask' }, '새 할 일'), h('div', { class: 'card' }, addForm));
 };
 
 function taskRows(t) {
@@ -299,7 +328,7 @@ views.review = async (parts, q) => {
   if (q.plan_id) params.set('plan_id', q.plan_id);
   if (q.from) params.set('from', q.from);
   if (q.to) params.set('to', q.to);
-  const [r, snaps] = await Promise.all([api('GET', '/api/review?' + params), api('GET', '/api/review/snapshots')]);
+  const [r, snaps, ex] = await Promise.all([api('GET', '/api/review?' + params), api('GET', '/api/review/snapshots'), api('GET', '/api/experiment')]);
   const m = r.metrics, dq = r.drill_query;
   const tasksHref = (extra) => '#/tasks?' + [dq, extra].filter(Boolean).join('&');
   const runsHref = (extra) => '#/runs?' + [dq, extra].filter(Boolean).join('&');
@@ -328,6 +357,7 @@ views.review = async (parts, q) => {
 
   return h('div', {},
     h('h2', {}, '돌아보기'),
+    h('div', { class: 'card row' }, h('b', {}, '5일 점검'), h('span', { class: 'muted small' }, ex.experiment ? `${ex.records.length}/${ex.max_days}일 기록함` : '아직 시작 전'), link('#/experiment', ex.experiment ? '기록하러 가기 →' : '시작하기 →')),
     h('div', { class: 'card' }, filter, h('div', { class: 'small muted mt' }, `기준: 지우지 않은 할 일 · 기간은 할 일 마감일 기준 · 오늘(서울) ${r.today} · 단위 분`)),
     h('div', { class: 'metrics' },
       metric(tasksHref('status=all'), m.plan_count, '계획 수 (딸린 할 일, 계획 ' + m.plans_included + '개)'),
