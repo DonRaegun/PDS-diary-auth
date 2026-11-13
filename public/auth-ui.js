@@ -19,10 +19,10 @@ function showAuth(note) {
     $app.replaceChildren(h('div', { class: 'card authbox' },
       h('h2', {}, mode === 'login' ? '로그인' : '가입'),
       note ? h('p', { class: 'muted' }, note) : null,
+      mode === 'signup' ? h('p', { class: 'small muted' }, '이메일과 10자 이상의 비밀번호만 있으면 됩니다. 이메일 확인 메일은 보내지 않습니다.') : null,
       f,
-      h('p', { class: 'small' }, mode === 'login' ? '처음이세요? ' : '이미 계정이 있나요? ',
-        h('a', { href: '#', onclick: (e) => { e.preventDefault(); mode = mode === 'login' ? 'signup' : 'login'; draw(); } }, mode === 'login' ? '가입하기' : '로그인하기')),
-      h('p', { class: 'small muted' }, '내 기록은 로그인한 나만 볼 수 있습니다. 비밀번호는 서버에 원문으로 저장되지 않습니다.')));
+      h('p', { class: 'small' }, mode === 'login' ? '아직 계정이 없나요? ' : '이미 계정이 있나요? ',
+        h('button', { type: 'button', class: 'ghost', onclick: () => { mode = mode === 'login' ? 'signup' : 'login'; draw(); } }, mode === 'login' ? '새로 가입하기' : '로그인하러 가기'))));
   };
   draw();
 }
@@ -40,7 +40,7 @@ document.getElementById('logout').addEventListener('click', guard(async () => {
 // ---------- 5일 관찰 ----------
 views.experiment = async () => {
   const v = await api('GET', '/api/experiment');
-  const rulesBox = h('div', { class: 'card small' },
+  const rulesBox = h('details', { class: 'card small' }, h('summary', {}, '계산 규칙 보기 (지표·단위·빠진 값·중복 값 처리)'),
     h('div', {}, h('b', {}, '지표: '), v.metric.metric_name, ' (단위: ', v.metric.unit, ')'),
     h('div', {}, h('b', {}, '계산 규칙: '), v.metric.calc_rule),
     h('div', {}, h('b', {}, '빠진 값: '), v.rules.missing),
@@ -48,7 +48,8 @@ views.experiment = async () => {
     h('div', {}, h('b', {}, '튀는 값: '), v.rules.outlier),
     h('div', {}, h('b', {}, '반올림: '), v.rules.rounding),
     h('div', {}, h('b', {}, '주 시작 요일: '), v.rules.week_start));
-  const out = h('div', {}, h('h2', {}, '5일 관찰'), rulesBox);
+  const out = h('div', {}, h('h2', {}, '5일 관찰'),
+    h('p', { class: 'muted' }, '5일 동안 「그날 계획한 시간」과 「실제로 일한 시간」을 적고, 그 차이(하루 계획 오차)가 줄어드는지 봅니다. 순서: ① 1일차에 질문과 계획 규칙을 정한다 → ② 서로 다른 날짜로 2일을 기록한다 → ③ 계획 규칙을 한 번 바꾼다 → ④ 나머지 3일을 기록한다.'), rulesBox);
   if (!v.experiment) {
     const f = h('form', { class: 'grid', onsubmit: guard(async (e) => {
       e.preventDefault(); await api('POST', '/api/experiment', formData(f)); toast('1일차 질문과 규칙을 정했습니다'); render();

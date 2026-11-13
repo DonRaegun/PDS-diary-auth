@@ -114,6 +114,9 @@ views.home = async () => {
   }) }, planFormFields(), h('button', { type: 'submit' }, '계획 만들기'));
   return h('div', {},
     h('h2', {}, '내 계획'),
+    plans.length ? null : h('div', { class: 'card small' }, h('b', {}, '처음이라면 이 순서로 써 보세요'),
+      h('ol', {}, h('li', {}, '아래 「새 계획」에 이번 주 계획 하나를 만듭니다.'), h('li', {}, '위쪽 「할 일」에서 그 계획에 할 일을 넣고, 한 일은 [완료]를 누릅니다.'),
+        h('li', {}, '「돌아보기」에서 계획한 시간과 실제 시간을 비교합니다.'), h('li', {}, '인증 과제 확인은 「5일 관찰」과 「내 계정」에서 합니다.'))),
     plans.length ? h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {}, ['ID', '계획', '기간', '우선순위', '성공 기준', '예상 시간', '할 일', '수정 횟수'].map((t) => h('th', {}, t)))),
       h('tbody', {}, plans.map((p) => h('tr', {},
