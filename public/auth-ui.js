@@ -10,11 +10,13 @@ function showAuth(note) {
     const f = h('form', { class: 'grid auth', onsubmit: guard(async (e) => {
       e.preventDefault();
       const d = formData(f);
+      if (mode === 'signup' && d.password !== d.password2) throw new Error('비밀번호 확인이 서로 다릅니다. 다시 입력해 주세요');
       const out = await api('POST', mode === 'login' ? '/api/auth/login' : '/api/auth/signup', { email: d.email, password: d.password });
       me = out.user; enterApp();
     }) },
       field('이메일', h('input', { name: 'email', type: 'email', required: true, autocomplete: 'username', maxlength: 254 })),
       field(mode === 'login' ? '비밀번호' : '비밀번호 (10자 이상)', h('input', { name: 'password', type: 'password', required: true, minlength: mode === 'login' ? 1 : 10, maxlength: 128, autocomplete: mode === 'login' ? 'current-password' : 'new-password' })),
+      mode === 'signup' ? field('비밀번호 다시 입력', h('input', { name: 'password2', type: 'password', required: true, minlength: 10, maxlength: 128, autocomplete: 'new-password' })) : null,
       h('button', { type: 'submit' }, mode === 'login' ? '로그인' : '가입하기'));
     $app.replaceChildren(h('div', { class: 'card authbox' },
       h('h2', {}, mode === 'login' ? '로그인' : '가입'),
