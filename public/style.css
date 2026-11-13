@@ -103,7 +103,7 @@ a.metric:hover{border-color:var(--accent);text-decoration:none;transform:transla
 
 /* 로그인·가입 */
 .authbox{max-width:420px;margin:36px auto;padding:34px 30px 26px;text-align:left}
-.authbox::before{content:"계획 → 실행 → 돌아보기";display:block;margin-bottom:14px;font-size:12px;font-weight:800;letter-spacing:.04em;color:var(--accent)}
+.authbox button.ghost{border:0;background:none;padding:0 4px;color:var(--accent);font-weight:700;text-decoration:underline;box-shadow:none;width:auto}
 .authbox h2{font-size:28px;margin-bottom:6px}
 .auth{grid-template-columns:1fr;margin-top:18px}
 .auth button{min-height:46px;font-size:15px;margin-top:4px}
